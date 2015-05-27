@@ -1,0 +1,406 @@
+<head>
+	<title>WebGL example</title>
+	<style type="text/css3">
+		#scene {
+			border-color: #f00;
+			border-width: 10px;
+		}
+	</style>
+
+	<script id="shader-fs" type="x-shader/x-fragment">
+		precision mediump float;
+		varying vec3 vColor;
+        varying vec2 canvasSize;
+		varying float time;
+		const float period = 1000.0;
+
+		float rand(vec2 xy) {
+			//commonly used formula for noise in GLSL on the internet
+			const float mult = 43758.5453;
+			const vec2 coefs = vec2(12.9898, 78.233);
+			float phase = dot(coefs, xy);
+			float phase_clamped = mod(phase, 3.14);
+			return fract(sin(phase) * mult);
+		}
+
+        const float poly_rad = 15.0;
+        const int num_points = 6;
+		const float line_width = 2.0;
+		const float half_line_width = 0.5 * line_width;
+
+        vec2 findOrigin(void)
+        {
+            //return vec2(200.0);
+            vec2 fragCoord = gl_FragCoord.xy;
+
+            vec2 vrad = vec2(2.0 * poly_rad, 1.7 * poly_rad);
+            vec2 coord_scale = fragCoord / vrad;
+            vec2 coord_down = floor(coord_scale) * vrad;
+            vec2 coord_up = ceil(coord_scale) * vrad;
+			
+            vec2 du = vec2(coord_down.x, coord_up.y);
+            vec2 ud = vec2(coord_up.x, coord_down.y);
+
+            vec2 origin = coord_down;
+            if (distance(coord_up, fragCoord) <= distance(origin, fragCoord)) {
+                origin = coord_up;
+            }
+            if (distance(du, fragCoord) <= distance(origin, fragCoord)) {
+                origin = du;
+            }
+            if (distance(ud, fragCoord) <= distance(origin, fragCoord)) {
+                origin = ud;
+            }
+            return origin;
+        }
+
+		bool is_in_polygon(vec2 coord, vec2 origin)
+		{
+            //DEBUG: print the center of the object
+			/*
+            if (abs(coord.x - origin.x) < 1.5 && abs(coord.y - origin.y) < 1.5) {
+                return true;
+            }
+			*/
+
+            vec2 d_o = coord - origin;
+            float PI = acos(-1.0);
+            float d_phase = 2.0 * PI / float(num_points);
+            for (int i = 0; i < num_points; i++) {
+                float phi0 = float(i) * d_phase;
+                float phi1 = phi0 + d_phase;
+                float x0 = origin.x + poly_rad * cos(phi0);
+                float y0 = origin.y + poly_rad * sin(phi0);
+                
+                float x1 = origin.x + poly_rad * cos(phi1);
+                float y1 = origin.y + poly_rad * sin(phi1);
+
+                float k = (y1 - y0) / (x1 - x0);
+
+                //DEBUG: paint points on the circle
+				/*
+                if (abs(coord.x - x0) < 3.5 && abs(coord.y - y0) < 3.5)
+                {
+                    return true;
+                }
+				*/
+
+                vec2 v0 = vec2(x0, y0);
+                vec2 v1 = vec2(x1, y1);
+
+                vec2 progress = coord - v0;
+                vec2 dpoints = v1 - v0;
+                vec2 vscale = progress / dpoints;
+
+                vec2 scale_lim = clamp(vscale, vec2(0.0), vec2(1.0));
+                bool on_line = scale_lim == vscale;
+
+                vec2 vmin = vec2(min(v0.x, v1.x), min(v0.y, v1.y));
+                vec2 vmax = vec2(max(v0.x, v1.x), max(v0.y, v1.y));
+                vec2 clamp_coord = clamp(coord, vmin, vmax);
+
+                bool on_straight_line = false;
+
+                if (abs(dpoints.y) < half_line_width
+					&& abs(progress.y) < half_line_width
+					&& clamp_coord.x == coord.x)
+				{
+                    on_straight_line = true;
+                }
+                if (abs(dpoints.x) < half_line_width
+					&& abs(progress.x) < half_line_width
+					&& clamp_coord.y == coord.y)
+				{
+                    on_straight_line = true;
+                }
+
+                if (abs(y0 + (coord.x - x0) * k - coord.y) < line_width && on_line
+					|| on_straight_line)
+                {
+                    return true;
+                }
+			}
+			return false;
+		}
+
+		vec4 bg_color(vec2 coord) {
+			//fade in and out without rapid zero crossing
+			//add a 1.0 constant to shift sine from [-1, 1] to [0, 1]
+			float sine_part = (1.0 + sin(time / period)) / 2.0;
+
+			//generate some pseudo-random noise
+			//in fact, we could also mix time for more randomness
+			float rand_part = mod(rand(sin(coord)), 0.5);
+
+			//linear combination: (1 - a_ * sine_part + a * rand_part
+			float b = mix(sine_part, rand_part, 0.9);
+			return vec4(abs(vColor.r), abs(vColor.g), b, 1.0);
+		}
+
+		void main(void) {
+            vec2 fragCoord = gl_FragCoord.xy;
+            gl_FragColor = bg_color(fragCoord);
+            if (fragCoord.x > 300.0) {
+                return;
+            }
+            
+			vec2 origin = findOrigin();
+			
+			if (is_in_polygon(fragCoord, origin)) {
+				gl_FragColor = vec4(0.0, 1.0, 1.0, 1.0);
+				return;
+			}
+			else {
+				const int num_samples = 10;
+				float rad_sc = 4.8 * poly_rad;
+				vec4 color = bg_color(origin);
+
+				float PI = acos(-1.0);
+				float d_phase = 2.0 * PI / float(num_samples);
+				for (int i = 0; i < num_samples; i++) {
+					float phase = float(i) * d_phase;
+					float mult = float(i + 1) / float(num_samples);
+					vec2 diff = mult * rad_sc * vec2(cos(phase), sin(phase));
+					color += bg_color(origin + diff);
+				}
+
+				color /= float(num_samples + 1);
+				gl_FragColor = color;
+			}
+		}
+	</script>
+
+	<script id="shader-vs" type="x-shader/x-vertex">
+		precision mediump float;
+		attribute vec3 position;
+		attribute vec3 color;
+		uniform float time_in;
+        uniform vec2 canvasSize_in;
+
+		varying float time;
+		varying vec3 vColor;
+        varying vec2 canvasSize;
+		void main(void) {
+			gl_Position = vec4(position, 1.0);
+			time = time_in;
+			vColor = color;
+		}
+	</script>
+
+	<script type="text/javascript">
+		"use strict";
+		var gl = null;
+		var canvas = null;
+		var gl_running = false;
+
+		var buf_quad = null;
+
+		var attr_position = null;
+		var attr_color = null;
+		var uniform_time_in = null;
+        var uniform_canvas_size_in = null;
+
+		function die(msg) {
+			stopGL();
+			alert(msg);
+			throw msg;
+		}
+
+		function drawFrame(time) {
+			console.log("drawing at " + time);
+			if (!gl_running) {
+				return;
+			}
+			window.requestAnimationFrame(drawFrame, canvas);
+
+			gl.clearColor(0.0, 0.0, 0.0, 1.0);
+			gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+			gl.bindBuffer(gl.ARRAY_BUFFER, buf_quad);
+
+			gl.uniform1f(uniform_time_in, time);
+			gl.vertexAttribPointer(attr_position, 3, gl.FLOAT, false, 0, 0);
+			gl.vertexAttribPointer(attr_color, 3, gl.FLOAT, false, 0, 0);
+			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+		}
+
+		function initBuffer() {
+			buf_quad = gl.createBuffer();
+			gl.bindBuffer(gl.ARRAY_BUFFER, buf_quad);
+
+			var vertices = [
+				1.0, 1.0, 0.0,
+				-1.0, 1.0, 0.0,
+				1.0, -1.0, 0.0,
+				-1.0, -1.0, 0.0
+			];
+			gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices),
+				gl.STATIC_DRAW);
+		}
+
+		function shader(name) {
+			var src = document.getElementById(name);
+			if (!src) {
+				die("Failed to find source for shader " + name);
+				return null;
+			}
+
+			var src_txt = "";
+			var child = src.firstChild;
+			if (!child) {
+				die("failed to find source node child");
+				return null;
+			}
+
+			while (child) {
+				if (child.nodeType == child.TEXT_NODE) {
+					src_txt += child.textContent;
+				}
+				child = child.nextSibling;
+			}
+
+			var shader_obj = null;
+
+			if (src.type == "x-shader/x-fragment") {
+				shader_obj = gl.createShader(gl.FRAGMENT_SHADER);
+			}
+			else if (src.type == "x-shader/x-vertex") {
+				shader_obj = gl.createShader(gl.VERTEX_SHADER);
+			}
+			else {
+				die("Unknown shader source");
+				return null;
+			}
+
+			if (!shader_obj) {
+				die("failed creating shader object");
+				return null;
+			}
+
+			console.log("source for " + name + " => " + src_txt);
+
+			gl.shaderSource(shader_obj, src_txt);
+			gl.compileShader(shader_obj);
+
+			if (!gl.getShaderParameter(shader_obj, gl.COMPILE_STATUS)) {
+				die("Error compiling shaders: " + gl.getShaderInfoLog(shader_obj));
+				return null;
+			}
+
+			return shader_obj;
+		}
+
+		function compileShaders() {
+			var fragment_shader = shader("shader-fs");
+			var vertex_shader = shader("shader-vs");
+			if (!fragment_shader || !vertex_shader) {
+				die("Failed to compile shaders");
+				return;
+			}
+
+			var prog = gl.createProgram();
+			gl.attachShader(prog, vertex_shader);
+			gl.attachShader(prog, fragment_shader);
+			gl.linkProgram(prog);
+
+			if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+				die("Unable to initialize the shader");
+				return;
+			}
+
+			gl.useProgram(prog);
+			attr_position = gl.getAttribLocation(prog, "position");
+			if (attr_position < 0) {
+				die("position attribute not found");
+				return;
+			}
+
+			attr_color = gl.getAttribLocation(prog, "color");
+			if (attr_color < 0) {
+				die("color attribute not found");
+				return;
+			}
+
+			uniform_time_in = gl.getUniformLocation(prog, "time_in");
+			if (uniform_time_in < 0) {
+				die("time_in uniform not found");
+				return;
+			}
+			
+            uniform_canvas_size_in = gl.getUniformLocation(prog, "canvasSize_in");
+			if (uniform_canvas_size_in < 0) {
+				die("canvasSize_in uniform not found");
+				return;
+			}
+			gl.enableVertexAttribArray(attr_position);
+			gl.enableVertexAttribArray(attr_color);
+		}
+
+		function initWebGL(canvas) {
+			gl = null;
+			var err = null;
+			try {
+				gl = canvas.getContext("webgl")
+					|| canvas.getContext("experimental-webgl");
+			}
+			catch (e) {
+				err = e;
+			}
+
+			if ((gl == null) || (err != null)) {
+				die("Failed to initialize WebGL, error is " + err);
+				gl = null;
+			}
+
+			return (gl != null);
+		}
+
+		function startGL() {
+			window.requestAnimationFrame = window.requestAnimationFrame ||
+				window.webkitRequestAnimationFrame ||
+				window.mozRequestAnimationFrame ||
+				window.oRequestAnimationFrame ||
+				window.msRequestAnimationFrame ||
+				function (callback) {
+					window.setTimeout(callback, 1000.0 / 60.0);
+				};
+
+			if (null == window.requestAnimationFrame) {
+				die("requestAnimationFrame not supported!");
+				return;
+			}
+
+			canvas = document.getElementById("scene");
+			if (!canvas) {
+				die("canvas not found!");
+				return;
+			}
+
+			if (!initWebGL(canvas)) {
+				return;
+			}
+			initBuffer();
+
+			gl.enable(gl.DEPTH_TEST);
+			gl.depthFunc(gl.LEQUAL);
+			gl.viewport(0, 0, canvas.width, canvas.height);
+            gl.uniform2f(uniform_canvas_size_in, canvas.width, canvas.height);
+
+			gl_running = true;
+			compileShaders();
+			window.requestAnimationFrame(drawFrame, canvas);
+		}
+
+		function stopGL() {
+			gl_running = false;
+		}
+	</script>
+</head>
+
+<body>
+	<input type="button" value="start" onclick="startGL()"/>
+	<input type="button" value="stop" onclick="stopGL()"/>
+	<br/>
+	<canvas id="scene" width="500" height="500"/>
+</body>
+</html>

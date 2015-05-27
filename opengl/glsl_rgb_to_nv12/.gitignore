@@ -1,0 +1,8 @@
+gmon.out
+*.so
+*.o
+*.bin
+*.trace
+out.*
+test
+
